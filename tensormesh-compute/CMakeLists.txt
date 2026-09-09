@@ -13,6 +13,8 @@ find_library(ROCKSDB_LIBRARY NAMES rocksdb REQUIRED)
 add_library(tensormesh_compute SHARED
     src/acoustic_impedance.cpp
     src/spectral_decomposition.cpp
+    src/spatial_morton.cpp
+    src/borehole_trajectory.cpp
 )
 target_include_directories(tensormesh_compute PUBLIC include)
 target_compile_features(tensormesh_compute PUBLIC cxx_std_23)

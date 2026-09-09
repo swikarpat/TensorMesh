@@ -77,7 +77,13 @@ class MCPToolTests(unittest.TestCase):
         tools = asyncio.run(server.list_tools())
         self.assertEqual(
             {tool.name for tool in tools},
-            {"query_borehole_strata", "evaluate_mineral_assays", "trace_supply_dependency"},
+            {
+                "query_borehole_strata",
+                "evaluate_mineral_assays",
+                "trace_supply_dependency",
+                "query_spatial_concession",
+                "audit_shipping_corridor",
+            },
         )
 
 

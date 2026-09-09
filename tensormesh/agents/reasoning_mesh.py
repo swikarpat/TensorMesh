@@ -7,7 +7,8 @@ from tensormesh.agents.geochemist import GeochemistAgent
 from tensormesh.agents.reasoning_models import AgentHypothesis, ReasoningMeshResult
 from tensormesh.agents.structural_geologist import StructuralGeologistAgent
 from tensormesh.agents.supervisor import MultiAgentSupervisor
-from tensormesh.storage import CF_A2A_CHECKPOINTS, RocksDBStore
+from tensormesh.compute import encode_morton_3d
+from tensormesh.storage import CF_A2A_CHECKPOINTS, CF_SPATIAL_VOXELS, RocksDBStore
 
 
 class GeologicalReasoningMesh:
@@ -29,6 +30,11 @@ class GeologicalReasoningMesh:
         voxel_volume_m3: float,
         extraction_yield: float,
         supply_risk: float,
+        trajectory_stations: list[dict[str, Any]] | None = None,
+        spatial_voxels: list[tuple[int, int, int]] | None = None,
+        origin_port: str | None = None,
+        destination_port: str | None = None,
+        vessel_waypoints: list[tuple[float, float]] | None = None,
     ) -> ReasoningMeshResult:
         task_id = task_id or str(uuid4())
         hypotheses: list[AgentHypothesis] = []
@@ -38,12 +44,32 @@ class GeologicalReasoningMesh:
         hypotheses.append(geochem)
         self._checkpoint(task_id, "hypothesis", geochem)
 
-        structural = self.structural_geologist.analyze(task_id, strata_intervals, faults, voxel_volume_m3)
+        structural = self.structural_geologist.analyze(
+            task_id, strata_intervals, faults, voxel_volume_m3, trajectory_stations
+        )
+        self._store_spatial_voxels(task_id, spatial_voxels or [])
         self._handoff(task_id, geochem, structural, handoffs)
         hypotheses.append(structural)
         self._checkpoint(task_id, "hypothesis", structural)
 
-        economic = self.economic_assessor.analyze(task_id, geochem, structural, extraction_yield, supply_risk)
+        economic = self.economic_assessor.analyze(
+            task_id,
+            geochem,
+            structural,
+            extraction_yield,
+            supply_risk,
+            origin_port,
+            destination_port,
+            vessel_waypoints,
+        )
+        certificate = economic.evidence.get("dfars_252_225_7052_compliance_certificate", {})
+        audit_hash = certificate.get("audit_hash")
+        if audit_hash:
+            self.store.put_json(
+                CF_A2A_CHECKPOINTS,
+                f"{task_id}:shipping_audit:{audit_hash}",
+                {"task_id": task_id, **certificate},
+            )
         self._handoff(task_id, structural, economic, handoffs)
         hypotheses.append(economic)
         self._checkpoint(task_id, "hypothesis", economic)
@@ -61,6 +87,15 @@ class GeologicalReasoningMesh:
             result.model_dump(),
         )
         return result
+
+    def _store_spatial_voxels(self, task_id: str, spatial_voxels: list[tuple[int, int, int]]) -> None:
+        for x, y, z in spatial_voxels:
+            code = encode_morton_3d(int(x), int(y), int(z))
+            self.store.put_json(
+                CF_SPATIAL_VOXELS,
+                f"morton:{code:016x}",
+                {"task_id": task_id, "x": int(x), "y": int(y), "z": int(z), "morton_code": code},
+            )
 
     def _checkpoint(self, task_id: str, record_type: str, payload: AgentHypothesis) -> None:
         self.store.put_json(
