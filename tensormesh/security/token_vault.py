@@ -15,6 +15,7 @@ class TokenVault:
             "SUPPLIER": r"(Supplier\s*#?[A-Z0-9-]+|Account\s*#?\d+)",
             "AMOUNT": r"(\$\d+(?:,\d{3})*(?:\.\d{2})?|\d+\s*(?:MT|Metric Tons|kg|tons))",
             "ALLOY_SPEC": r"([A-Z][a-z]?-[A-Z][a-z]?\s*alloy|NdFeB|SmCo)"
+            ,"DEFENSE_IDENTIFIER": r"(?i)\b(?:CAGE\s*CODE|CAGE|NSN|ITAR|DFARS|FAR|CONTRACT\s*(?:NO\.?|NUMBER)?|DOD)\s*[-:#A-Z0-9/ ]{0,40}"
         }
 
     def _initialize_encryption(self) -> Fernet:

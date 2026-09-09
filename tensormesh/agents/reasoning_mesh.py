@@ -1,3 +1,5 @@
+import asyncio
+import sys
 from typing import Any
 from uuid import uuid4
 
@@ -9,17 +11,35 @@ from tensormesh.agents.structural_geologist import StructuralGeologistAgent
 from tensormesh.agents.supervisor import MultiAgentSupervisor
 from tensormesh.compute import encode_morton_3d
 from tensormesh.storage import CF_A2A_CHECKPOINTS, CF_SPATIAL_VOXELS, RocksDBStore
+from tensormesh.telemetry.otel_tracer import OpenTelemetryTracer, get_otel_tracer
 
 
 class GeologicalReasoningMesh:
-    def __init__(self, store: RocksDBStore, minimum_confidence: float = 0.6):
+    def __init__(
+        self,
+        store: RocksDBStore,
+        minimum_confidence: float = 0.6,
+        telemetry: OpenTelemetryTracer | None = None,
+    ):
         self.store = store
         self.supervisor = MultiAgentSupervisor(minimum_confidence=minimum_confidence)
         self.geochemist = GeochemistAgent()
         self.structural_geologist = StructuralGeologistAgent()
         self.economic_assessor = EconomicAssessorAgent()
+        self.telemetry = telemetry or get_otel_tracer()
 
     def evaluate_deposit(
+        self,
+        **kwargs: Any,
+    ) -> ReasoningMeshResult:
+        """Synchronously evaluate a deposit for existing API callers."""
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return asyncio.run(self.evaluate_deposit_async(**kwargs))
+        raise RuntimeError("evaluate_deposit cannot be called synchronously from an active event loop; use evaluate_deposit_async")
+
+    async def evaluate_deposit_async(
         self,
         *,
         task_id: str | None = None,
@@ -39,54 +59,110 @@ class GeologicalReasoningMesh:
         task_id = task_id or str(uuid4())
         hypotheses: list[AgentHypothesis] = []
         handoffs: list[dict[str, Any]] = []
-
-        geochem = self.geochemist.analyze(task_id, assays, thresholds)
-        hypotheses.append(geochem)
-        self._checkpoint(task_id, "hypothesis", geochem)
-
-        structural = self.structural_geologist.analyze(
-            task_id, strata_intervals, faults, voxel_volume_m3, trajectory_stations
+        parent_context = self.telemetry.span(
+            "a2a.reasoning_mesh",
+            {"task_id": task_id, "agent_role": "reasoning_mesh"},
         )
-        self._store_spatial_voxels(task_id, spatial_voxels or [])
-        self._handoff(task_id, geochem, structural, handoffs)
-        hypotheses.append(structural)
-        self._checkpoint(task_id, "hypothesis", structural)
+        parent_span = parent_context.__enter__()
 
-        economic = self.economic_assessor.analyze(
-            task_id,
-            geochem,
-            structural,
-            extraction_yield,
-            supply_risk,
-            origin_port,
-            destination_port,
-            vessel_waypoints,
-        )
-        certificate = economic.evidence.get("dfars_252_225_7052_compliance_certificate", {})
-        audit_hash = certificate.get("audit_hash")
-        if audit_hash:
+        async def run_geochemist() -> AgentHypothesis:
+            with self.telemetry.span(
+                "agent.geochemist", {"task_id": task_id, "agent_role": "geochemist"}
+            ) as span:
+                hypothesis = await asyncio.to_thread(
+                    self.geochemist.analyze, task_id, assays, thresholds
+                )
+                span.set_attribute("confidence_score", hypothesis.confidence_score)
+                span.set_attribute("dfars_compliant", False)
+                return hypothesis
+
+        async def run_structural_geologist() -> AgentHypothesis:
+            with self.telemetry.span(
+                "agent.structural_geologist",
+                {"task_id": task_id, "agent_role": "structural_geologist"},
+            ) as span:
+                hypothesis = await asyncio.to_thread(
+                    self.structural_geologist.analyze,
+                    task_id,
+                    strata_intervals,
+                    faults,
+                    voxel_volume_m3,
+                    trajectory_stations,
+                )
+                span.set_attribute("confidence_score", hypothesis.confidence_score)
+                span.set_attribute("dfars_compliant", False)
+                return hypothesis
+
+        try:
+            geochem, structural = await asyncio.gather(
+                run_geochemist(), run_structural_geologist()
+            )
+            hypotheses.append(geochem)
+            self._checkpoint(task_id, "hypothesis", geochem)
+
+            self._store_spatial_voxels(task_id, spatial_voxels or [])
+            self._handoff(task_id, geochem, structural, handoffs)
+            hypotheses.append(structural)
+            self._checkpoint(task_id, "hypothesis", structural)
+
+            async def run_economic_assessor() -> AgentHypothesis:
+                with self.telemetry.span(
+                    "agent.economic_assessor",
+                    {"task_id": task_id, "agent_role": "economic_assessor"},
+                ) as span:
+                    hypothesis = await asyncio.to_thread(
+                        self.economic_assessor.analyze,
+                        task_id,
+                        geochem,
+                        structural,
+                        extraction_yield,
+                        supply_risk,
+                        origin_port,
+                        destination_port,
+                        vessel_waypoints,
+                    )
+                    certificate = hypothesis.evidence.get(
+                        "dfars_252_225_7052_compliance_certificate", {}
+                    )
+                    span.set_attribute("confidence_score", hypothesis.confidence_score)
+                    span.set_attribute("dfars_compliant", certificate.get("dfars_compliant", False))
+                    return hypothesis
+
+            economic = await run_economic_assessor()
+            certificate = economic.evidence.get("dfars_252_225_7052_compliance_certificate", {})
+            audit_hash = certificate.get("audit_hash")
+            if audit_hash:
+                self.store.put_json(
+                    CF_A2A_CHECKPOINTS,
+                    f"{task_id}:shipping_audit:{audit_hash}",
+                    {"task_id": task_id, **certificate},
+                )
+            self._handoff(task_id, structural, economic, handoffs)
+            hypotheses.append(economic)
+            self._checkpoint(task_id, "hypothesis", economic)
+
+            result = ReasoningMeshResult(
+                task_id=task_id,
+                verdict=economic.conclusion,
+                confidence_score=economic.confidence_score,
+                hypotheses=hypotheses,
+                handoffs=handoffs,
+            )
             self.store.put_json(
                 CF_A2A_CHECKPOINTS,
-                f"{task_id}:shipping_audit:{audit_hash}",
-                {"task_id": task_id, **certificate},
+                f"{task_id}:verdict",
+                result.model_dump(),
             )
-        self._handoff(task_id, structural, economic, handoffs)
-        hypotheses.append(economic)
-        self._checkpoint(task_id, "hypothesis", economic)
-
-        result = ReasoningMeshResult(
-            task_id=task_id,
-            verdict=economic.conclusion,
-            confidence_score=economic.confidence_score,
-            hypotheses=hypotheses,
-            handoffs=handoffs,
-        )
-        self.store.put_json(
-            CF_A2A_CHECKPOINTS,
-            f"{task_id}:verdict",
-            result.model_dump(),
-        )
-        return result
+            parent_span.set_attribute("confidence_score", result.confidence_score)
+            parent_span.set_attribute(
+                "dfars_compliant",
+                economic.evidence.get("dfars_252_225_7052_compliance_certificate", {}).get(
+                    "dfars_compliant", False
+                ),
+            )
+            return result
+        finally:
+            parent_context.__exit__(*sys.exc_info())
 
     def _store_spatial_voxels(self, task_id: str, spatial_voxels: list[tuple[int, int, int]]) -> None:
         for x, y, z in spatial_voxels:
