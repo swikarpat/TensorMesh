@@ -1,0 +1,25 @@
+# Python Environments
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environment Variables & Secrets
+.env
+*.key
+
+# Local Databases & Data
+*.sqlite
+*.db
+data/
+*.rocksdb/
+tensormesh-compute/build/
+tensormesh/storage/_rocksdb_bridge*.so
+tensormesh/compute/_tensormesh_compute*.so
+tensormesh/compute/libtensormesh_compute*.dylib
+
+# IDE & OS Files
+.vscode/
+.idea/
+.DS_Store
