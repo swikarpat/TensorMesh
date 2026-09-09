@@ -1,0 +1,43 @@
+syntax = "proto3";
+
+package tensormesh.maritime;
+
+option java_package = "com.tensormesh.ais.proto";
+option java_multiple_files = true;
+option java_outer_classname = "MaritimeTelemetryProto";
+
+message LatLng {
+  double latitude = 1;
+  double longitude = 2;
+}
+
+message AisPing {
+  string mmsi = 1;
+  string vessel_name = 2;
+  double latitude = 3;
+  double longitude = 4;
+  int64 timestamp = 5;
+  float speed_knots = 6;
+  string cargo_type = 7;
+}
+
+message CorridorAuditRequest {
+  string mmsi = 1;
+  string vessel_name = 2;
+  string origin_port = 3;
+  string destination_port = 4;
+  repeated LatLng waypoints = 5;
+  string cargo_manifest = 6;
+}
+
+message CorridorAuditResponse {
+  bool dfars_compliant = 1;
+  string status = 2;
+  string nearest_restricted_port = 3;
+  double distance_km = 4;
+  string audit_hash = 5;
+}
+
+service MaritimeComplianceService {
+  rpc AuditLiveCorridor(CorridorAuditRequest) returns (CorridorAuditResponse);
+}
