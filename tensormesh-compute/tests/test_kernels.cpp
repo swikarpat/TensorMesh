@@ -1,5 +1,7 @@
 #include "tensormesh_compute/acoustic_impedance.hpp"
 #include "tensormesh_compute/spectral_decomposition.hpp"
+#include "tensormesh_compute/spatial_morton.hpp"
+#include "tensormesh_compute/borehole_trajectory.hpp"
 
 #include <cassert>
 #include <cmath>
@@ -23,5 +25,16 @@ int main() {
             assert(std::isfinite(value));
         }
     }
+    const auto morton = tensormesh::compute::encode_morton_3d(17, 23, 31);
+    std::uint32_t x;
+    std::uint32_t y;
+    std::uint32_t z;
+    tensormesh::compute::decode_morton_3d(morton, x, y, z);
+    assert(x == 17 && y == 23 && z == 31);
+    const auto trajectory = tensormesh::compute::compute_minimum_curvature_trajectory({
+        {0.0, 0.0, 0.0}, {100.0, 0.0, 0.0}, {200.0, 90.0, 0.0}});
+    assert(trajectory.size() == 3);
+    assert(std::abs(trajectory[1].true_vertical_depth_m - 100.0) < 1e-6);
+    assert(trajectory[2].northing_m > 0.0);
     return 0;
 }
