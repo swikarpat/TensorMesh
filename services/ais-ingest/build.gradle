@@ -1,0 +1,61 @@
+plugins {
+    id 'java'
+    id 'com.google.protobuf' version '0.9.4'
+}
+
+group = 'com.tensormesh'
+version = '1.0.0'
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
+}
+
+def grpcVersion = '1.66.0'
+def protobufVersion = '4.28.2'
+def kafkaStreamsVersion = '3.8.1'
+
+dependencies {
+    implementation "org.apache.kafka:kafka-streams:${kafkaStreamsVersion}"
+    implementation "com.google.protobuf:protobuf-java:${protobufVersion}"
+    implementation "io.grpc:grpc-protobuf:${grpcVersion}"
+    implementation "io.grpc:grpc-stub:${grpcVersion}"
+    implementation "io.grpc:grpc-netty-shaded:${grpcVersion}"
+    implementation 'org.slf4j:slf4j-api:2.0.16'
+    compileOnly 'org.apache.tomcat:annotations-api:6.0.53'
+
+    testImplementation "org.apache.kafka:kafka-streams-test-utils:${kafkaStreamsVersion}"
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.11.0'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher:1.11.0'
+}
+
+protobuf {
+    protoc {
+        artifact = "com.google.protobuf:protoc:${protobufVersion}"
+    }
+    plugins {
+        grpc {
+            artifact = "io.grpc:protoc-gen-grpc-java:${grpcVersion}"
+        }
+    }
+    generateProtoTasks {
+        all().configureEach { task ->
+            task.plugins {
+                grpc {}
+            }
+        }
+    }
+}
+
+sourceSets {
+    main {
+        proto {
+            srcDir file('../../proto')
+        }
+    }
+}
+
+tasks.named('test') {
+    useJUnitPlatform()
+}
