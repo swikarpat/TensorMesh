@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 
 from tensormesh.graph.neo4j_schema import SupplyChainGraph
 from tensormesh.storage import CF_A2A_CHECKPOINTS, CF_BOREHOLE_TELEMETRY, CF_SPATIAL_VOXELS, RocksDBStore
+from tensormesh.telemetry.otel_tracer import get_otel_tracer
 
 
 class BoreholeStrataRequest(BaseModel):
@@ -160,6 +161,22 @@ class MCPToolService:
         )
         return SupplyDependencyResponse.model_validate(result)
 
+    def query_geological_knowledge_graph(
+        self, deposit_name: str, min_confidence: float = 0.7
+    ) -> dict[str, Any]:
+        if not deposit_name.strip():
+            raise ValueError("deposit_name must not be empty")
+        if not 0.0 <= min_confidence <= 1.0:
+            raise ValueError("min_confidence must be between 0 and 1")
+        result = self.graph_db.query_hybrid_knowledge_graph(deposit_name)
+        for field in ("host_rocks", "minerals", "refinery_paths"):
+            result[field] = [
+                item for item in result.get(field, [])
+                if float(item.get("confidence", 1.0)) >= min_confidence
+            ]
+        result["min_confidence"] = min_confidence
+        return result
+
     def query_spatial_concession(self, request: SpatialConcessionRequest) -> SpatialConcessionResponse:
         regions = {
             "Odisha": (18.0, 22.5, 81.3, 87.5),
@@ -265,30 +282,47 @@ def create_mcp_server(service: MCPToolService) -> FastMCP:
         instructions="Geological exploration and critical-mineral supply-chain tools.",
         stateless_http=True,
     )
+    telemetry = get_otel_tracer()
 
     @server.tool(name="query_borehole_strata", structured_output=True)
     def query_borehole_strata(request: BoreholeStrataRequest) -> BoreholeStrataResponse:
         """Inspect stratigraphic depth intervals and lithology logs."""
-        return service.query_borehole_strata(request)
+        with telemetry.span("mcp.query_borehole_strata", {"agent_role": "mcp"}):
+            return service.query_borehole_strata(request)
 
     @server.tool(name="evaluate_mineral_assays", structured_output=True)
     def evaluate_mineral_assays(request: MineralAssayRequest) -> MineralAssayResponse:
         """Evaluate elemental ppm concentrations against deposit benchmarks."""
-        return service.evaluate_mineral_assays(request)
+        with telemetry.span("mcp.evaluate_mineral_assays", {"agent_role": "mcp"}):
+            return service.evaluate_mineral_assays(request)
 
     @server.tool(name="trace_supply_dependency", structured_output=True)
     def trace_supply_dependency(request: SupplyDependencyRequest) -> SupplyDependencyResponse:
         """Trace mineral dependencies and identify supply bottlenecks."""
-        return service.trace_supply_dependency(request)
+        with telemetry.span("mcp.trace_supply_dependency", {"agent_role": "mcp"}):
+            return service.trace_supply_dependency(request)
+
+    @server.tool(name="query_geological_knowledge_graph", structured_output=True)
+    def query_geological_knowledge_graph(
+        deposit_name: str, min_confidence: float = 0.7
+    ) -> dict[str, Any]:
+        """Retrieve geological context, mineral purity, and refinery paths."""
+        with telemetry.span(
+            "mcp.query_geological_knowledge_graph",
+            {"agent_role": "mcp", "deposit_name": deposit_name, "min_confidence": min_confidence},
+        ):
+            return service.query_geological_knowledge_graph(deposit_name, min_confidence)
 
     @server.tool(name="query_spatial_concession", structured_output=True)
     def query_spatial_concession(request: SpatialConcessionRequest) -> SpatialConcessionResponse:
         """Verify an Indian critical-mineral concession coordinate and lease status."""
-        return service.query_spatial_concession(request)
+        with telemetry.span("mcp.query_spatial_concession", {"agent_role": "mcp"}):
+            return service.query_spatial_concession(request)
 
     @server.tool(name="audit_shipping_corridor", structured_output=True)
     def audit_shipping_corridor(request: ShippingCorridorRequest) -> ShippingCorridorResponse:
         """Audit vessel waypoints against maritime supply-chain geofences."""
-        return service.audit_shipping_corridor(request)
+        with telemetry.span("mcp.audit_shipping_corridor", {"agent_role": "mcp"}):
+            return service.audit_shipping_corridor(request)
 
     return server

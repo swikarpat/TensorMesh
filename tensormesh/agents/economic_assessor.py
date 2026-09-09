@@ -27,6 +27,8 @@ class EconomicAssessorAgent:
         shipping_audit = None
         if origin_port and destination_port and vessel_waypoints:
             shipping_audit = audit_shipping_corridor(origin_port, destination_port, vessel_waypoints)
+            if not shipping_audit.dfars_compliant:
+                verdict = "dfars_violation"
         return AgentHypothesis(
             agent_id=self.agent_id,
             task_id=task_id,

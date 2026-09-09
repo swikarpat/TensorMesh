@@ -1,6 +1,7 @@
 import os
+from typing import Any, Dict, List
+
 from neo4j import GraphDatabase
-from typing import List, Dict
 
 class SupplyChainGraph:
     def __init__(self, user="neo4j", password="password123"):
@@ -13,9 +14,12 @@ class SupplyChainGraph:
 
     def initialize_schema(self):
         """Creates constraints to ensure data integrity."""
-        query = "CREATE CONSTRAINT IF NOT EXISTS FOR (e:Entity) REQUIRE e.name IS UNIQUE"
         with self.driver.session() as session:
-            session.run(query)
+            session.run("CREATE CONSTRAINT IF NOT EXISTS FOR (e:Entity) REQUIRE e.name IS UNIQUE")
+            for label in ("Deposit", "RockFormation", "RareEarthMineral", "Refinery"):
+                session.run(
+                    f"CREATE CONSTRAINT IF NOT EXISTS FOR (n:{label}) REQUIRE n.name IS UNIQUE"
+                )
 
     def ingest_trade_route(self, source: str, target: str, material: str, quantity: int):
         """Creates nodes and relationships for a trade route."""
@@ -72,3 +76,54 @@ class SupplyChainGraph:
             "bottleneck_entities": bottlenecks,
             "smelter_concentration_risk": round(top_share, 4),
         }
+
+    def query_hybrid_knowledge_graph(self, deposit_name: str) -> Dict[str, Any]:
+        """Return structured deposit traversal plus indexed survey excerpts."""
+        query = """
+        MATCH (d:Deposit {name: $deposit_name})
+        OPTIONAL MATCH (d)-[:HOSTED_IN]->(formation:RockFormation)
+        OPTIONAL MATCH (d)-[contains:CONTAINS_MINERAL]->(mineral:RareEarthMineral)
+        OPTIONAL MATCH (mineral)-[supplies:SUPPLIES_REFINERY]->(refinery:Refinery)
+        RETURN d.name AS deposit_name,
+               d.geological_context AS geological_context,
+               collect(DISTINCT {
+                   name: formation.name,
+                   lithology: formation.lithology,
+                   confidence: coalesce(formation.confidence, 1.0)
+               }) AS host_rocks,
+               collect(DISTINCT {
+                   name: mineral.name,
+                   purity_ppm: contains.purity_ppm,
+                   confidence: coalesce(mineral.confidence, 1.0)
+               }) AS minerals,
+               collect(DISTINCT {
+                   name: refinery.name,
+                   route: supplies.route,
+                   confidence: coalesce(refinery.confidence, 1.0)
+               }) AS refinery_paths,
+               coalesce(d.survey_excerpts, []) AS survey_excerpts
+        """
+        with self.driver.session() as session:
+            result = session.run(query, deposit_name=deposit_name)
+            record = next(iter(result), None)
+        if record is None:
+            return {
+                "deposit_name": deposit_name,
+                "geological_context": None,
+                "host_rocks": [],
+                "minerals": [],
+                "refinery_paths": [],
+                "survey_excerpts": [],
+            }
+        data = record.data() if hasattr(record, "data") else dict(record)
+        excerpts = data.get("survey_excerpts", []) or []
+        data["survey_excerpts"] = [
+            excerpt if isinstance(excerpt, dict) else {"text": str(excerpt)}
+            for excerpt in excerpts
+        ]
+        data["survey_synthesis"] = " ".join(
+            str(excerpt.get("text", "")).strip()
+            for excerpt in data["survey_excerpts"]
+            if excerpt.get("text")
+        )
+        return data
