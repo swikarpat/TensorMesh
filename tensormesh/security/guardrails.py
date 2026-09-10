@@ -6,6 +6,8 @@ from collections.abc import Mapping
 from typing import Any
 
 from tensormesh.security.token_vault import TokenVault
+from tensormesh.telemetry.logging import logger
+from tensormesh.telemetry.metrics import record_dfars_violation
 
 
 class GuardrailViolation(ValueError):
@@ -55,6 +57,18 @@ def enforce_dfars_output_invariant(verdict: Any) -> Any:
     if conclusion in {"viable", "commercially_viable"}:
         audit_hash = certificate.get("audit_hash")
         if not audit_hash or not certificate.get("dfars_compliant"):
+            record_dfars_violation(
+                certificate.get("vessel_mmsi", "unknown"),
+                certificate.get("nearest_restricted_port", "unknown"),
+            )
+            logger.warning(
+                "DFARS compliance certificate missing or non-compliant",
+                extra={
+                    "event": "DFARS_VIOLATION_DETECTED",
+                    "vessel_mmsi": certificate.get("vessel_mmsi", "unknown"),
+                    "restricted_port": certificate.get("nearest_restricted_port", "unknown"),
+                },
+            )
             raise GuardrailViolation("commercially viable verdict lacks a compliant DFARS audit trail")
         canonical_certificate = {
             key: value for key, value in certificate.items() if key != "audit_hash"
@@ -63,5 +77,17 @@ def enforce_dfars_output_invariant(verdict: Any) -> Any:
             json.dumps(canonical_certificate, sort_keys=True, separators=(",", ":")).encode("utf-8")
         ).hexdigest()
         if audit_hash != expected_hash:
+            record_dfars_violation(
+                certificate.get("vessel_mmsi", "unknown"),
+                certificate.get("nearest_restricted_port", "unknown"),
+            )
+            logger.warning(
+                "DFARS compliance certificate hash verification failed",
+                extra={
+                    "event": "DFARS_VIOLATION_DETECTED",
+                    "vessel_mmsi": certificate.get("vessel_mmsi", "unknown"),
+                    "restricted_port": certificate.get("nearest_restricted_port", "unknown"),
+                },
+            )
             raise GuardrailViolation("DFARS certificate hash failed mathematical verification")
     return verdict

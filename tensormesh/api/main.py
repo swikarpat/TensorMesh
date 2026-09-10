@@ -1,10 +1,12 @@
 import json
+import time
 from statistics import mean
 from typing import Any
 
 import numpy as np
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field
 
 # Import our Core Modules
@@ -29,8 +31,22 @@ from tensormesh.mcp.server import (
 from tensormesh.simulation.replay_engine import DeterministicReplaySimulator
 from tensormesh.storage import RocksDBStore
 from tensormesh.telemetry.tracer import CryptographicTracer
+from tensormesh.telemetry.metrics import get_metrics_payload, record_request_duration
 
 app = FastAPI(title="TensorMesh API", version="1.0.0")
+
+
+@app.middleware("http")
+async def record_metrics(request: Request, call_next):
+    start = time.perf_counter()
+    response = await call_next(request)
+    record_request_duration(
+        time.perf_counter() - start,
+        request.method,
+        request.url.path,
+        response.status_code,
+    )
+    return response
 
 app.add_middleware(
     CORSMiddleware,
@@ -78,6 +94,11 @@ ELEMENT_ALIASES = {
 
 
 app.mount("/mcp", mcp.streamable_http_app())
+
+
+@app.get("/metrics", response_class=PlainTextResponse)
+def metrics():
+    return get_metrics_payload()
 
 @app.get("/")
 def read_root():
