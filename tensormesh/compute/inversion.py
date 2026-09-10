@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import time
 from typing import Iterable
 
 import numpy as np
 
 from tensormesh.storage import CF_SPATIAL_VOXELS, RocksDBStore
+from tensormesh.telemetry.metrics import record_simd_inversion_duration
 
 try:
     from tensormesh.compute._tensormesh_compute import (
@@ -26,8 +28,11 @@ def _as_trace(trace: Iterable[float]) -> np.ndarray:
 def invert_acoustic_impedance(trace: Iterable[float], z0: float) -> np.ndarray:
     """Estimate post-stack acoustic impedance from reflection coefficients."""
     trace_array = _as_trace(trace)
+    start = time.perf_counter()
     if _native_invert_acoustic_impedance is not None:
-        return np.asarray(_native_invert_acoustic_impedance(trace_array.tolist(), float(z0)), dtype=np.float32)
+        result = np.asarray(_native_invert_acoustic_impedance(trace_array.tolist(), float(z0)), dtype=np.float32)
+        record_simd_inversion_duration((time.perf_counter() - start) * 1_000_000)
+        return result
 
     impedance = np.empty_like(trace_array)
     previous = max(float(z0), 0.0)
@@ -35,6 +40,7 @@ def invert_acoustic_impedance(trace: Iterable[float], z0: float) -> np.ndarray:
         reflection = float(np.clip(sample, -0.999, 0.999))
         previous *= (1.0 + reflection) / (1.0 - reflection)
         impedance[index] = previous
+    record_simd_inversion_duration((time.perf_counter() - start) * 1_000_000)
     return impedance
 
 

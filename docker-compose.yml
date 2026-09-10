@@ -23,8 +23,12 @@ services:
       - "8000:8000"
     environment:
       - NEO4J_URI=bolt://neo4j:7687
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4317
+      - TENSORMESH_LOKI_URL=http://loki:3100/loki/api/v1/push
     depends_on:
       - neo4j
+      - tempo
+      - loki
     networks:
       - tensormesh-network
 
@@ -41,6 +45,65 @@ services:
     networks:
       - tensormesh-network
 
+  tempo:
+    image: grafana/tempo:latest
+    container_name: tensormesh-tempo
+    command: ["-config.file=/etc/tempo/tempo.yaml"]
+    ports:
+      - "4317:4317"
+      - "4318:4318"
+      - "3200:3200"
+    volumes:
+      - ./infra/tempo.yaml:/etc/tempo/tempo.yaml:ro
+      - tempo-data:/tmp/tempo
+    networks:
+      - tensormesh-network
+
+  loki:
+    image: grafana/loki:latest
+    container_name: tensormesh-loki
+    command: ["-config.file=/etc/loki/loki.yaml"]
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./infra/loki.yaml:/etc/loki/loki.yaml:ro
+      - loki-data:/tmp/loki
+    networks:
+      - tensormesh-network
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: tensormesh-prometheus
+    command: ["--config.file=/etc/prometheus/prometheus.yaml"]
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./infra/prometheus.yaml:/etc/prometheus/prometheus.yaml:ro
+      - prometheus-data:/prometheus
+    networks:
+      - tensormesh-network
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: tensormesh-grafana
+    ports:
+      - "3001:3000"
+    volumes:
+      - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      - prometheus
+      - loki
+      - tempo
+    networks:
+      - tensormesh-network
+
 networks:
   tensormesh-network:
     driver: bridge
+
+volumes:
+  tempo-data:
+  loki-data:
+  prometheus-data:
+  grafana-data:

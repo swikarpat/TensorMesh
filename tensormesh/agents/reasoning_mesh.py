@@ -12,6 +12,7 @@ from tensormesh.agents.supervisor import MultiAgentSupervisor
 from tensormesh.compute import encode_morton_3d
 from tensormesh.storage import CF_A2A_CHECKPOINTS, CF_SPATIAL_VOXELS, RocksDBStore
 from tensormesh.telemetry.otel_tracer import OpenTelemetryTracer, get_otel_tracer
+from tensormesh.telemetry.metrics import change_active_agents
 
 
 class GeologicalReasoningMesh:
@@ -66,32 +67,40 @@ class GeologicalReasoningMesh:
         parent_span = parent_context.__enter__()
 
         async def run_geochemist() -> AgentHypothesis:
-            with self.telemetry.span(
-                "agent.geochemist", {"task_id": task_id, "agent_role": "geochemist"}
-            ) as span:
-                hypothesis = await asyncio.to_thread(
-                    self.geochemist.analyze, task_id, assays, thresholds
-                )
-                span.set_attribute("confidence_score", hypothesis.confidence_score)
-                span.set_attribute("dfars_compliant", False)
-                return hypothesis
+            change_active_agents(1, "geochemist")
+            try:
+                with self.telemetry.span(
+                    "agent.geochemist", {"task_id": task_id, "agent_role": "geochemist"}
+                ) as span:
+                    hypothesis = await asyncio.to_thread(
+                        self.geochemist.analyze, task_id, assays, thresholds
+                    )
+                    span.set_attribute("confidence_score", hypothesis.confidence_score)
+                    span.set_attribute("dfars_compliant", False)
+                    return hypothesis
+            finally:
+                change_active_agents(-1, "geochemist")
 
         async def run_structural_geologist() -> AgentHypothesis:
-            with self.telemetry.span(
-                "agent.structural_geologist",
-                {"task_id": task_id, "agent_role": "structural_geologist"},
-            ) as span:
-                hypothesis = await asyncio.to_thread(
-                    self.structural_geologist.analyze,
-                    task_id,
-                    strata_intervals,
-                    faults,
-                    voxel_volume_m3,
-                    trajectory_stations,
-                )
-                span.set_attribute("confidence_score", hypothesis.confidence_score)
-                span.set_attribute("dfars_compliant", False)
-                return hypothesis
+            change_active_agents(1, "structural_geologist")
+            try:
+                with self.telemetry.span(
+                    "agent.structural_geologist",
+                    {"task_id": task_id, "agent_role": "structural_geologist"},
+                ) as span:
+                    hypothesis = await asyncio.to_thread(
+                        self.structural_geologist.analyze,
+                        task_id,
+                        strata_intervals,
+                        faults,
+                        voxel_volume_m3,
+                        trajectory_stations,
+                    )
+                    span.set_attribute("confidence_score", hypothesis.confidence_score)
+                    span.set_attribute("dfars_compliant", False)
+                    return hypothesis
+            finally:
+                change_active_agents(-1, "structural_geologist")
 
         try:
             geochem, structural = await asyncio.gather(
@@ -106,27 +115,31 @@ class GeologicalReasoningMesh:
             self._checkpoint(task_id, "hypothesis", structural)
 
             async def run_economic_assessor() -> AgentHypothesis:
-                with self.telemetry.span(
-                    "agent.economic_assessor",
-                    {"task_id": task_id, "agent_role": "economic_assessor"},
-                ) as span:
-                    hypothesis = await asyncio.to_thread(
-                        self.economic_assessor.analyze,
-                        task_id,
-                        geochem,
-                        structural,
-                        extraction_yield,
-                        supply_risk,
-                        origin_port,
-                        destination_port,
-                        vessel_waypoints,
-                    )
-                    certificate = hypothesis.evidence.get(
-                        "dfars_252_225_7052_compliance_certificate", {}
-                    )
-                    span.set_attribute("confidence_score", hypothesis.confidence_score)
-                    span.set_attribute("dfars_compliant", certificate.get("dfars_compliant", False))
-                    return hypothesis
+                change_active_agents(1, "economic_assessor")
+                try:
+                    with self.telemetry.span(
+                        "agent.economic_assessor",
+                        {"task_id": task_id, "agent_role": "economic_assessor"},
+                    ) as span:
+                        hypothesis = await asyncio.to_thread(
+                            self.economic_assessor.analyze,
+                            task_id,
+                            geochem,
+                            structural,
+                            extraction_yield,
+                            supply_risk,
+                            origin_port,
+                            destination_port,
+                            vessel_waypoints,
+                        )
+                        certificate = hypothesis.evidence.get(
+                            "dfars_252_225_7052_compliance_certificate", {}
+                        )
+                        span.set_attribute("confidence_score", hypothesis.confidence_score)
+                        span.set_attribute("dfars_compliant", certificate.get("dfars_compliant", False))
+                        return hypothesis
+                finally:
+                    change_active_agents(-1, "economic_assessor")
 
             economic = await run_economic_assessor()
             certificate = economic.evidence.get("dfars_252_225_7052_compliance_certificate", {})
