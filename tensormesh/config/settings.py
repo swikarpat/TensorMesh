@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     DATA_DIR: Path = BASE_DIR / "data"
     ROCKSDB_PATH: Path = DATA_DIR / "rocksdb"
     KEY_PATH: Path = DATA_DIR / "vault.key"
+    REDIS_URL: str = "redis://localhost:6379/0"
     
     # Hardware Routing Thresholds
     VRAM_WARNING_THRESHOLD_PERCENT: float = 85.0

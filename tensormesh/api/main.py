@@ -4,7 +4,7 @@ from statistics import mean
 from typing import Any
 
 import numpy as np
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field
@@ -32,6 +32,7 @@ from tensormesh.simulation.replay_engine import DeterministicReplaySimulator
 from tensormesh.storage import RocksDBStore
 from tensormesh.telemetry.tracer import CryptographicTracer
 from tensormesh.telemetry.metrics import get_metrics_payload, record_request_duration
+from tensormesh.resilience.rate_limiter import DistributedRateLimiter
 
 app = FastAPI(title="TensorMesh API", version="1.0.0")
 
@@ -63,6 +64,7 @@ mcp = create_mcp_server(tool_service)
 simulator = DeterministicReplaySimulator()
 tracer = CryptographicTracer()
 reasoning_mesh = GeologicalReasoningMesh(RocksDBStore(settings.ROCKSDB_PATH))
+rate_limiter = DistributedRateLimiter()
 
 class PromptRequest(BaseModel):
     text: str
@@ -77,6 +79,12 @@ class DepositEvaluationRequest(BaseModel):
     raw_seismic_trace: list[float] = Field(min_length=1)
     elemental_assays: dict[str, float]
     depth_range: list[float] = Field(min_length=2, max_length=2)
+
+
+def enforce_deposit_rate_limit(request: Request, req: DepositEvaluationRequest) -> None:
+    client_host = request.client.host if request.client else "unknown"
+    if not rate_limiter.allow(f"{client_host}:{req.deposit_id}"):
+        raise HTTPException(status_code=429, detail="Rate limit exceeded. Try again later.")
 
 
 DEFAULT_ASSAY_THRESHOLDS = {
@@ -137,7 +145,7 @@ def run_simulation(req: SimulationRequest):
     }
 
 
-@app.post("/api/deposits/evaluate")
+@app.post("/api/deposits/evaluate", dependencies=[Depends(enforce_deposit_rate_limit)])
 def evaluate_deposit(req: DepositEvaluationRequest) -> dict[str, Any]:
     """Run seismic, geological, agentic, and supply-impact evaluation as one transaction."""
     start_depth, end_depth = req.depth_range

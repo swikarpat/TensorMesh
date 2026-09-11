@@ -13,6 +13,19 @@ services:
     networks:
       - tensormesh-network
 
+  redis:
+    image: redis:7-alpine
+    container_name: tensormesh-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - tensormesh-network
+
   # 2. The Python FastAPI & ML Backend
   backend:
     build:
@@ -23,10 +36,12 @@ services:
       - "8000:8000"
     environment:
       - NEO4J_URI=bolt://neo4j:7687
+      - REDIS_URL=redis://redis:6379/0
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4317
       - TENSORMESH_LOKI_URL=http://loki:3100/loki/api/v1/push
     depends_on:
       - neo4j
+      - redis
       - tempo
       - loki
     networks:
